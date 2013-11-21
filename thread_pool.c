@@ -112,7 +112,6 @@ int threadpool_add_task(threadpool_t *pool, void (*function)(void *), void *argu
       return -1;
     }
         
-    /* pthread_cond_broadcast and unlock */
     err = pthread_mutex_unlock(&(pool->lock));
     if(err)
       printf("Error: failed to unlock\n");
@@ -132,12 +131,9 @@ int threadpool_destroy(threadpool_t *pool)
     int err = 0;
     int i;
 
-    
-    /* Wake up all worker threads */
+    // Add dummy task to the threadpool to signal the
+    // threads to exit.
     while(threadpool_add_task(pool, NULL, NULL));
-    
-    err = pthread_cond_broadcast(&(pool->notify));
-
     
 
     /* Join all worker thread */
@@ -155,22 +151,37 @@ int threadpool_destroy(threadpool_t *pool)
     return err;
 }
 
+// This function tries to grab a task from the task queue.
+// The thread pool's lock must be locked when this function is
+// called. If a task is found to execute, the lock is released,
+// the task is executed, and the function returns 1. If the queue
+// is empty, the lock remains locked and the function returns 0.
 static int try_grab_task(threadpool_t* pool)
 {
   if(pool->queueHead != pool->queueTail)
   {
+    //queue is not empty
     threadpool_task_t task = pool->queue[pool->queueHead];
 
     if(task.function == NULL)
     {
+      // This is the dummy task telling the worker threads to exit so we can
+      // shut down. Release the lock and exit.
       pthread_mutex_unlock(&(pool->lock));
       pthread_exit(NULL);
     }
+
+    // Found a task to execute. Remove task from the queue by bumping up the
+    // queue's head, release the lock, and execute the function. We want the
+    // lock released before execution because the task does not have to do with
+    // the thread pool.
     pool->queueHead = (pool->queueHead + 1) % (pool->task_queue_size_limit + 1);
     pthread_mutex_unlock(&(pool->lock));
     (task.function)(task.argument);
     return 1;
   }
+
+  // Queue was empty. Did not find a task to execute.
   return 0;
 }
 
@@ -181,10 +192,24 @@ static int try_grab_task(threadpool_t* pool)
 static void *thread_do_work(void *threadpool)
 { 
     threadpool_t* pool = (threadpool_t*)threadpool;
+
     while(1) {
         /* Lock must be taken to wait on conditional variable */
         pthread_mutex_lock(&(pool->lock));
 
+        // Before going to sleep, we want to check whether the queue is empty.
+        // This is very important because if all worker threads are busy doing
+        // work when the condition is triggered, none of them will see the
+        // notification. If no other tasks ever get added to the queue, the
+        // condition will never be triggered again and a task will sit untouched
+        // even after the threads finish their work because they would just go
+        // to sleep waiting for a notification that never comes. To prevent this,
+        // they check the queue to make sure that it is empty before going to sleep.
+        // We do not have to worry about tasks being added to the queue between trying
+        // to grab the task and sleeping because if the queue is found to be empty,
+        // the executing thread never releases the lock until it gets to the wait() call.
+        // add_task requires the lock to add a task to the queue, so it will not be able
+        // to do so until the thread is waiting for a notification.
         if(try_grab_task(pool))
           continue;
 
@@ -192,6 +217,9 @@ static void *thread_do_work(void *threadpool)
            When returning from pthread_cond_wait(), do some task. */
         pthread_cond_wait(&(pool->notify), &(pool->lock));
 
+        // try_grab_task checks for spurious wakeups.
+        // If the queue is found to be empty, try_grab_task does not release
+        // the lock, so we have to do so here.
         if(!try_grab_task(pool))
           pthread_mutex_unlock(&(pool->lock));
     }
