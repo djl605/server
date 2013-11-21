@@ -5,11 +5,20 @@
 
 #include "seats.h"
 
+// Changed seats from a linked list to an array to improve
+// performance, so now we also need to keep track of the number
+// of seats in the array.
 seat_t* seats = NULL;
 int num_seats;
 
 char seat_state_to_char(seat_state_t);
 
+// Self-explanatory. Traverse the array, print out the status of every seat.
+// No locking needed because it is not harmful if a seat's state is changed
+// either before or after printing out the status. Since state is the only
+// variable of the seat_t structure which we print here that can change,
+// we do not have to worry about being consistent between different printed
+// variables reflecting different (inconsistent) states.
 void list_seats(char* buf, int bufsize)
 {
   int i, index = 0;
@@ -39,7 +48,11 @@ void view_seat(char* buf, int bufsize,  int seat_id, int customer_id, int custom
   seat_state_t temp_state = seats[i].state;
   int temp_cust_id = seats[i].customer_id;
 
-  //check to see whether we even need to lock
+  // check to see whether we even need to lock. This is an optimization to try to avoid
+  // locking whenever possible. If we see a state where we might want to update, we need
+  // to lock so that no other thread sees the seat in an inconsistent state. After locking,
+  // we also must make sure that no other thread has jumped ahead of us and claimed the seat
+  // while we were trying to lock.
   if(temp_state == AVAILABLE || (temp_state == PENDING && temp_cust_id == customer_id))
   {
     pthread_mutex_lock(&(seats[i].lock));
@@ -72,7 +85,7 @@ void confirm_seat(char* buf, int bufsize, int seat_id, int customer_id, int cust
   seat_state_t temp_state = seats[i].state;
   int temp_cust_id = seats[i].customer_id;
   
-  //check to see whether we even need to lock
+  // check to see whether we even need to lock. Same explanation as above.
   if(temp_state == PENDING && temp_cust_id == customer_id)
   {
     pthread_mutex_lock(&(seats[i].lock));
