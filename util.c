@@ -25,7 +25,15 @@ int parse_int_arg(char* filename, char* arg);
 
 void handle_connection_wrapper(void* connfd_ptr)
 {
+  // This function takes a void-pointer because that is the kind of
+  // function that a threadpool_task_t holds, but handle_connection takes
+  // an int-pointer so we typecast.
   handle_connection((int*)connfd_ptr);
+
+  // We allocated this space when we added the task to the queue so we wouldn't
+  // be relying on a stack variable not changing when it actually can change.
+  // Now that we're done handling the connection, we are done with this memory
+  // and can free it.
   free(connfd_ptr);
 }
 
