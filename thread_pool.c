@@ -70,29 +70,36 @@ threadpool_t *threadpool_create(int thread_count, int queue_size)
 }
 
 
-/*
- * Add a task to the threadpool
- *
- */
+ // Add a task to the threadpool. This function does not need to acquire a lock. The 
+ // reason for this is because this is the only function that ever touches the tail
+ // of the queue. If the queue head is pointing to the same location as the queue tail,
+ // this is taken to indicate an empty queue. When the tail is incremented after adding
+ // a task, it logically appears to have added the task atomically.
+ // We do not have to worry about calls to add_task overlapping each other because only
+ // the main thread that listens for connections ever calls add_task (whether it is adding
+ // an actual new task or the dummy task to tell the worker threads to shut down). 
+ // Since only one thread ever calls this function, all calls to it are sequential.
 int threadpool_add_task(threadpool_t *pool, void (*function)(void *), void *argument)
 {
     int err = 0;
-    /* Get the lock */
-    err = pthread_mutex_lock(&(pool->lock));
-    if(err)
-    {
-      printf("Error: lock failed\n");
-      return err;
-    }
 
     /* Add task to queue */
     // Queue is stored in a circular buffer. task_queue_size_limit + 1 is the size of the
     // array. Make sure that after the add, head != tail because that would look like
-    // an empty queue. If it would, the queue is full and an element cannot be added
+    // an empty queue. If it would, the queue is full and an element cannot be added.
+    // We do not have to lock before checking queueHead because it will only ever be
+    // moved to allow MORE space in the queue; therefore, we are not worried that some
+    // time between making sure that there is space in the queue and completing the
+    // addition of the task to the queue the spot that we are writing too becomes invalid.
+    // As is mentioned above, calls to threadpool_add_task can never overlap, so no issues
+    // with queueTail moving either.
     if((pool->queueTail + 1) % (pool->task_queue_size_limit + 1) != pool->queueHead)
     {
       pool->queue[pool->queueTail].function = function;
       pool->queue[pool->queueTail].argument = argument;
+
+      // Must increment tail AFTER adding function to the queue in so that the task
+      // is not grabbed before add_task has finished writing it
       pool->queueTail = (pool->queueTail + 1) % (pool->task_queue_size_limit + 1);
 
       // Notify sleeping threads that a new task has been added to the queue.
@@ -105,18 +112,9 @@ int threadpool_add_task(threadpool_t *pool, void (*function)(void *), void *argu
       // The queue is full.  We cannot add a task. We fail here and return -1. The caller
       // may try to call add_task repeatedly until a task is added successfully. We are not
       // worried about starvation in that case. Explanation for why is in http_server.c
-      err = pthread_mutex_unlock(&(pool->lock));
-      if(err)
-        printf("Error: failed to unlock\n");
-
       return -1;
     }
         
-    err = pthread_mutex_unlock(&(pool->lock));
-    if(err)
-      printf("Error: failed to unlock\n");
-
-    
     return err;
 }
 
@@ -152,7 +150,7 @@ int threadpool_destroy(threadpool_t *pool)
 }
 
 // This function tries to grab a task from the task queue.
-// The thread pool's lock must be locked when this function is
+// The queue's head lock must be locked when this function is
 // called. If a task is found to execute, the lock is released,
 // the task is executed, and the function returns 1. If the queue
 // is empty, the lock remains locked and the function returns 0.
