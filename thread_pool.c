@@ -16,8 +16,8 @@
  */
 
 typedef struct {
-    void (*function)(void *);
-    void *argument;
+    void (*function)(int);
+    int argument;
 } threadpool_task_t;
 
 
@@ -79,7 +79,7 @@ threadpool_t *threadpool_create(int thread_count, int queue_size)
  // the main thread that listens for connections ever calls add_task (whether it is adding
  // an actual new task or the dummy task to tell the worker threads to shut down). 
  // Since only one thread ever calls this function, all calls to it are sequential.
-int threadpool_add_task(threadpool_t *pool, void (*function)(void *), void *argument)
+int threadpool_add_task(threadpool_t *pool, void (*function)(int), int argument)
 {
     int err = 0;
 
@@ -131,7 +131,7 @@ int threadpool_destroy(threadpool_t *pool)
 
     // Add dummy task to the threadpool to signal the
     // threads to exit.
-    while(threadpool_add_task(pool, NULL, NULL));
+    while(threadpool_add_task(pool, NULL, 0));
     
 
     /* Join all worker thread */

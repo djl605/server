@@ -60,7 +60,7 @@ int main(int argc,char *argv[])
 
     // initialize the threadpool
     // Set the number of threads and size of the queue
-    threadpool = threadpool_create(10,50);
+    threadpool = threadpool_create(10,1000);
 
 
     // Load the seats;
@@ -89,24 +89,7 @@ int main(int argc,char *argv[])
     {
         connfd = accept(listenfd, (struct sockaddr*)NULL, NULL);
 
-        // connfd is a local variable which will be changed the next time
-        // a new connection is accepted. In a single-threaded application,
-        // it is fine to pass the address of connfd to handle_connection because
-        // another connection cannot be accepted until the current one is done being
-        // handled. In a multi-threaded application, though, a new connection could
-        // be accepted before the current one is handled. Therefore, we need to allocate
-        // some persistent memory space to hold connfd and free it when we're done using
-        // it.
-
-        int* newspace = (int*)malloc(sizeof(int));
-        *newspace = connfd;
-        
-        // Keep trying to add task to the queue until it is successfully added. Not worried
-        // about starvation because only this thread ever tries to add tasks to the queue.
-        // If the queue is full now, eventually a task will be removed from the queue and a
-        // space will open up. Since no other thread adds tasks to the queue, no thread can
-        // jump ahead of this one with an add_task call.
-        while(threadpool_add_task(threadpool, handle_connection_wrapper, (void*)newspace));
+        while(threadpool_add_task(threadpool, handle_connection, connfd));
     }
 }
 
